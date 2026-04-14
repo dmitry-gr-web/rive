@@ -1,9 +1,4 @@
-import {
-  PLAYBACK_RATE,
-  SM_NAME,
-  START_THRESHOLD_DB,
-  STOP_SILENCE_MS,
-} from '@/constants/talk';
+import { PLAYBACK_RATE, SM_NAME, START_THRESHOLD_DB, STOP_SILENCE_MS } from '@/constants/talk';
 import { AudioStudioModule, useAudioRecorder } from '@siteed/expo-audio-studio';
 import { Audio } from 'expo-av';
 import React, { useCallback, useEffect, useRef } from 'react';
@@ -15,53 +10,65 @@ export type Phase = 'idle' | 'listening' | 'processing' | 'playing' | 'permissio
 export const useVoiceLoop = (
   riveRef: React.RefObject<RiveRef | null>,
   setPhase: React.Dispatch<React.SetStateAction<Phase>>,
-  setErrorText: React.Dispatch<React.SetStateAction<string | null>>,
   setRiveDebug: React.Dispatch<React.SetStateAction<string>>,
 ) => {
   const { startRecording, stopRecording } = useAudioRecorder();
 
+  // Референси для керування станом без зайвих ререндерів
   const playbackSoundRef = useRef<Audio.Sound | null>(null);
   const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loopRunningRef = useRef(false);
   const stoppingRef = useRef(false);
   const isMountedRef = useRef(true);
 
+  // Дані детектора голосу
   const lastLoudAtRef = useRef(0);
   const hasSpokenRef = useRef(false);
 
-  // --- Керування станами ---
-  const updateStatus = useCallback((next: Phase) => {
-    if (!isMountedRef.current) return;
-    setPhase(next);
-    const rive = riveRef.current;
-    if (!rive) return;
-    try {
-      rive.setInputState(SM_NAME, 'Talk', false);
-      rive.setInputState(SM_NAME, 'Hear', false);
-      rive.setInputState(SM_NAME, 'Check', false);
+  /**
+   * Оновлює візуальний стан у React та перемикає вводи у Rive анімації
+   */
+  const updateStatus = useCallback(
+    (next: Phase) => {
+      if (!isMountedRef.current) return;
+      setPhase(next);
 
-      if (next === 'listening') rive.setInputState(SM_NAME, 'Hear', true);
-      else if (next === 'processing') rive.setInputState(SM_NAME, 'Check', true);
-      else if (next === 'playing') rive.setInputState(SM_NAME, 'Talk', true);
-    } catch (e) {
-      setRiveDebug(`Rive err: ${String(e)}`);
-    }
-  }, [riveRef, setPhase, setRiveDebug]);
+      const rive = riveRef.current;
+      if (!rive) return;
 
-  // --- Налаштування аудіо (Динамік iOS) ---
+      try {
+        // Скидаємо всі тригери анімації
+        rive.setInputState(SM_NAME, 'Talk', false);
+        rive.setInputState(SM_NAME, 'Hear', false);
+        rive.setInputState(SM_NAME, 'Check', false);
+
+        // Активуємо потрібний стан в залежності від фази
+        if (next === 'listening') rive.setInputState(SM_NAME, 'Hear', true);
+        else if (next === 'processing') rive.setInputState(SM_NAME, 'Check', true);
+        else if (next === 'playing') rive.setInputState(SM_NAME, 'Talk', true);
+      } catch (e) {
+        setRiveDebug(`Rive error: ${String(e)}`);
+      }
+    },
+    [riveRef, setPhase, setRiveDebug],
+  );
+
+  /**
+   * Налаштовує глобальний аудіо-режим пристрою.
+   * Важливо для iOS: режим videoChat змушує звук йти через зовнішні динаміки.
+   */
   const setAudioMode = async (mode: 'record' | 'play') => {
     try {
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: mode === 'record',
         playsInSilentModeIOS: true,
         staysActiveInBackground: false,
-        interruptionModeIOS: 1, 
-        iosAudioMode: mode === 'play' ? 'videoChat' : 'voiceChat',
-        defaultToSpeaker: true,
+        interruptionModeIOS: 1,
         shouldDuckAndroid: true,
         playThroughEarpieceAndroid: false,
-      } as any);
+      });
 
+      // Додатковий форсований перемикач порту для iOS через нативний модуль
       if (mode === 'play' && Platform.OS === 'ios') {
         const mod = NativeModules.ExpoAudioStudioModule ?? NativeModules.AudioStudio;
         if (mod?.overrideOutputAudioPort) {
@@ -73,26 +80,39 @@ export const useVoiceLoop = (
     }
   };
 
-  const scheduleRestart = useCallback((delayMs = 150) => {
-    if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
-    loopRunningRef.current = false;
-    stoppingRef.current = false;
-    hasSpokenRef.current = false;
-    updateStatus('idle');
-    restartTimerRef.current = setTimeout(() => {
-      if (isMountedRef.current) startVoiceLoop();
-    }, delayMs);
-  }, [updateStatus]);
+  /**
+   * Очищує поточний звук та готує систему до нового циклу слуху
+   */
+  const scheduleRestart = useCallback(
+    (delayMs = 150) => {
+      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
 
-  // --- Відтворення (Високий голос) ---
+      loopRunningRef.current = false;
+      stoppingRef.current = false;
+      hasSpokenRef.current = false;
+
+      updateStatus('idle');
+
+      restartTimerRef.current = setTimeout(() => {
+        if (isMountedRef.current) startVoiceLoop();
+      }, delayMs);
+    },
+    [updateStatus],
+  );
+
+  /**
+   * Завантажує та відтворює записаний файл з ефектом високого голосу
+   */
   const playAudio = async (uri: string) => {
     try {
+      // Очищуємо попередній звук, якщо він був
       if (playbackSoundRef.current) {
         await playbackSoundRef.current.unloadAsync();
       }
 
       if (Platform.OS === 'ios') {
-        // Примусове скидання сесії для виходу звуку через зовнішній динамік
+        // "Ядерний" метод для iOS: вимикаємо і вмикаємо аудіо-движок,
+        // щоб скинути заблокований мікрофоном вихід на динамік
         await Audio.setAudioModeAsync({ allowsRecordingIOS: false } as any);
         await Audio.setIsEnabledAsync(false);
         await Audio.setIsEnabledAsync(true);
@@ -107,27 +127,31 @@ export const useVoiceLoop = (
         {
           shouldPlay: true,
           volume: 1.0,
-          rate: PLAYBACK_RATE, // Наприклад 1.5
-          shouldCorrectPitch: false, // Робить голос тонким (ефект бурундука)
+          rate: PLAYBACK_RATE,
+          shouldCorrectPitch: false, // false створює ефект "бурундука" при підвищенні rate
         },
         async (status) => {
           if (status.isLoaded && status.didJustFinish) {
             await sound.unloadAsync();
             scheduleRestart(100);
           }
-        }
+        },
       );
       playbackSoundRef.current = sound;
     } catch (e) {
-      setRiveDebug(`Play err: ${String(e)}`);
+      setRiveDebug(`Play error: ${String(e)}`);
       scheduleRestart(300);
     }
   };
 
+  /**
+   * Зупиняє запис та ініціює процес відтворення
+   */
   const stopAndPlay = async () => {
     if (stoppingRef.current) return;
     stoppingRef.current = true;
     updateStatus('processing');
+
     try {
       const result = await stopRecording();
       if (result?.fileUri) {
@@ -142,12 +166,15 @@ export const useVoiceLoop = (
     }
   };
 
-  // --- Головний цикл слуху ---
+  /**
+   * Основна функція запуску прослуховування
+   */
   const startVoiceLoop = useCallback(async () => {
     if (loopRunningRef.current || !isMountedRef.current) return;
     loopRunningRef.current = true;
 
     try {
+      // Запит прав на використання мікрофона
       const perm = await AudioStudioModule.requestPermissionsAsync();
       if (!perm.granted) {
         updateStatus('permission-denied');
@@ -168,11 +195,11 @@ export const useVoiceLoop = (
         bufferDurationSeconds: 0.1,
         onAudioStream: async (event) => {
           if (stoppingRef.current || !isMountedRef.current) return;
-          
+
           const samples = event.data as any;
           if (!samples || samples.length === 0) return;
 
-          // Розрахунок гучності
+          // Розрахунок RMS (середньоквадратичне значення) для визначення гучності в dB
           let sum = 0;
           for (let i = 0; i < samples.length; i++) {
             sum += samples[i] * samples[i];
@@ -182,39 +209,45 @@ export const useVoiceLoop = (
 
           const t = Date.now();
 
-          // Дебаг для налаштування порогу START_THRESHOLD_DB
-          setRiveDebug(`dB: ${db.toFixed(1)} | Spoken: ${hasSpokenRef.current ? 'YES' : 'NO'}`);
+          // Вивід технічної інформації для дебагу
+          setRiveDebug(`dB: ${db.toFixed(1)} | Spoken: ${hasSpokenRef.current ? 'ТАК' : 'НІ'}`);
 
-          // 1. Детектор голосу: користувач почав говорити
+          // 1. Якщо гучність вище порогу — фіксуємо активність голосу
           if (db >= START_THRESHOLD_DB) {
             lastLoudAtRef.current = t;
             hasSpokenRef.current = true;
           }
 
-          // 2. Детектор тиші: користувач замовк на ~1 сек
+          // 2. Якщо голос був зафіксований, але вже 1 секунду тиша — зупиняємо і граємо
           if (hasSpokenRef.current && t - lastLoudAtRef.current >= STOP_SILENCE_MS) {
             await stopAndPlay();
           }
         },
       });
     } catch (e) {
-      setRiveDebug(`Start err: ${String(e)}`);
+      setRiveDebug(`Start error: ${String(e)}`);
       loopRunningRef.current = false;
       scheduleRestart(1000);
     }
   }, [updateStatus, startRecording, stopRecording]);
 
+  /**
+   * Ініціалізація при монтуванні компонента
+   */
   useEffect(() => {
     isMountedRef.current = true;
-    // Android потребує невеликої паузи після старту Activity
-    const initDelay = Platform.OS === 'android' ? 600 : 100;
-    const t = setTimeout(() => startVoiceLoop(), initDelay);
-    
+
+    // Невелика задержка для Android, щоб уникнути конфліктів при старті Activity
+    const initDelay = Platform.OS === 'android' ? 400 : 100;
+    setTimeout(() => startVoiceLoop(), initDelay);
+
     return () => {
       isMountedRef.current = false;
       if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
       stopRecording().catch(() => {});
-      if (playbackSoundRef.current) playbackSoundRef.current.unloadAsync();
+      if (playbackSoundRef.current) {
+        playbackSoundRef.current.unloadAsync().catch(() => {});
+      }
     };
   }, [startVoiceLoop]);
 

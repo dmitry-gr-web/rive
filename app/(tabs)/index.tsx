@@ -8,10 +8,9 @@ export default function TalkScreen() {
   const riveRef = useRef<RiveRef>(null);
 
   const [phase, setPhase] = useState<Phase>('idle');
-  const [errorText, setErrorText] = useState<string | null>(null);
   const [riveDebug, setRiveDebug] = useState<string>('debug: waiting...');
 
-  const { applyRivePhase } = useVoiceLoop(riveRef, setPhase, setErrorText, setRiveDebug);
+  const { applyRivePhase } = useVoiceLoop(riveRef, setPhase, setRiveDebug);
 
   useEffect(() => {
     applyRivePhase(phase);
@@ -39,7 +38,6 @@ export default function TalkScreen() {
         <View style={styles.controls}>
           <Text style={styles.phaseText}>{phase.toUpperCase()}</Text>
           <Text style={styles.debugText}>{riveDebug}</Text>
-          {errorText && <Text style={styles.errorText}>{errorText}</Text>}
         </View>
       </ScrollView>
     </View>
