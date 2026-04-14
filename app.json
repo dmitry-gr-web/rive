@@ -9,7 +9,9 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.dmitry.my-app",
+      "appleTeamId": "XG8Z48DSKU"
     },
     "android": {
       "adaptiveIcon": {
@@ -19,7 +21,8 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.dmitry.myapp"
     },
     "web": {
       "output": "static",
@@ -27,6 +30,15 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "@siteed/audio-studio",
+        {
+          "enableBackgroundAudio": false,
+          "enableNotifications": false,
+          "enableDeviceDetection": false,
+          "enablePhoneStateHandling": false
+        }
+      ],
       [
         "expo-splash-screen",
         {

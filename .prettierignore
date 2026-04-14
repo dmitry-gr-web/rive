@@ -1,0 +1,10 @@
+node_modules
+.expo
+expo-env.d.ts
+dist
+build
+android
+ios
+web-build
+coverage
+*.log
